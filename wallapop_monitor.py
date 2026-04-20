@@ -50,12 +50,24 @@ HISTORIAL = Path(os.getenv("HISTORIAL_PATH", Path(__file__).parent / "chollos_vi
 HISTORIAL.parent.mkdir(parents=True, exist_ok=True)
 
 API_URL = "https://api.wallapop.com/api/v3/general/search"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Accept": "application/json",
-    "Accept-Language": "es-ES,es;q=0.9",
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://es.wallapop.com/",
+    "Origin": "https://es.wallapop.com",
+    "Connection": "keep-alive",
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
     "DeviceOS": "0",
+    "X-DeviceOS": "0",
 }
 
 
@@ -90,13 +102,33 @@ def enviar_telegram(mensaje):
         return False
 
 
+# Sesion global para mantener cookies entre peticiones
+_sesion = None
+
+def get_sesion():
+    global _sesion
+    if _sesion is None:
+        _sesion = requests.Session()
+        _sesion.headers.update(HEADERS)
+        try:
+            # Visitar la web primero para obtener cookies reales
+            _sesion.get("https://es.wallapop.com/", timeout=15)
+            time.sleep(2)
+        except Exception:
+            pass
+    return _sesion
+
+
 def buscar(query, pmin, pmax):
     try:
-        r = requests.get(API_URL, headers=HEADERS, params={
+        s = get_sesion()
+        r = s.get(API_URL, params={
             "keywords": query,
             "min_sale_price": pmin,
             "max_sale_price": pmax,
             "order_by": "newest",
+            "country_code": "ES",
+            "filters_source": "search_box",
         }, timeout=15)
         r.raise_for_status()
         data = r.json()
