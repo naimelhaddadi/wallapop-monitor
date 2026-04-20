@@ -41,7 +41,8 @@ BUSQUEDAS = [
     {"query": "dyson",                "precio_min": 100, "precio_max": 400, "precio_ref": 250},
 ]
 
-DESCUENTO_MIN  = 30       # % minimo sobre precio medio
+DESCUENTO_MIN  = 40       # % minimo sobre precio medio (subido de 30 a 40 para menos ruido)
+BENEFICIO_MIN  = 50       # € minimo de beneficio para alertar
 CAPITAL        = 430      # € disponibles
 COMISION_VENTA = 0.10     # 10% (envio + comision plataforma)
 INTERVALO_MIN  = 15       # minutos entre escaneos
@@ -172,6 +173,8 @@ def analizar_query(b, historial):
             venta = ref * (1 - COMISION_VENTA)
             beneficio = venta - i["precio"]
             roi = (beneficio / i["precio"]) * 100
+            if beneficio < BENEFICIO_MIN:  # filtrar chollos con poco margen real
+                continue
             chollos.append({
                 **i,
                 "descuento": desc,
