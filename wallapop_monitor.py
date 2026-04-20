@@ -222,32 +222,38 @@ def formato_telegram(c):
 
 def ciclo(historial):
     console.print(f"\n[dim]{datetime.now().strftime('%H:%M:%S')} - Escaneando {len(BUSQUEDAS)} busquedas...[/dim]")
-    total_nuevos = 0
+
+    # 1. Recoger todos los chollos de todas las busquedas
+    todos = []
     for b in BUSQUEDAS:
-        if total_nuevos >= MAX_ALERTAS_CICLO:
-            console.print(f"[yellow]  Limite de {MAX_ALERTAS_CICLO} alertas por ciclo alcanzado[/yellow]")
-            break
         chollos = analizar_query(b, historial)
-        for c in chollos:
-            if total_nuevos >= MAX_ALERTAS_CICLO:
-                break
-            total_nuevos += 1
-            historial.add(c["id"])
-            console.print(
-                f"[bold green]🔥 CHOLLO:[/bold green] {c['titulo']} - "
-                f"{c['precio']:.0f}€ (-{c['descuento']:.0f}%, ROI {c['roi']:.0f}%)"
-            )
-            enviar_telegram(formato_telegram(c))
-            time.sleep(1)
+        todos.extend(chollos)
         time.sleep(3)
 
-    if total_nuevos == 0:
+    # 2. Ordenar por ROI y quedarse con los mejores
+    todos.sort(key=lambda x: x["roi"], reverse=True)
+    mejores = todos[:MAX_ALERTAS_CICLO]
+
+    # 3. Marcar todos como vistos (aunque no se envien, para no repetir)
+    for c in todos:
+        historial.add(c["id"])
+
+    # 4. Enviar solo los mejores
+    for c in mejores:
+        console.print(
+            f"[bold green]🔥 CHOLLO:[/bold green] {c['titulo']} - "
+            f"{c['precio']:.0f}€ (-{c['descuento']:.0f}%, ROI {c['roi']:.0f}%)"
+        )
+        enviar_telegram(formato_telegram(c))
+        time.sleep(1)
+
+    if not mejores:
         console.print("[dim]  Sin chollos nuevos este ciclo[/dim]")
     else:
-        console.print(f"[bold green]✓ {total_nuevos} chollos enviados a Telegram[/bold green]")
+        console.print(f"[bold green]✓ {len(mejores)} mejores chollos enviados a Telegram[/bold green]")
 
     guardar_historial(historial)
-    return total_nuevos
+    return len(mejores)
 
 
 def main():
