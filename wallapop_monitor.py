@@ -167,7 +167,7 @@ def analizar_query(b, historial):
         return []
 
     infos = [extraer(i) for i in items if i]
-    infos = [i for i in infos if i["precio"] > 0]
+    infos = [i for i in infos if i is not None and i["precio"] > 0]
 
     # Precio de referencia: usamos el fijo si existe, si no calculamos media de Vinted
     if b.get("precio_ref"):
