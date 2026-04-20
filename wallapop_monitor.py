@@ -1,11 +1,11 @@
 """
-Monitor continuo de chollos Wallapop con alertas Telegram.
-Comprueba cada X minutos y te avisa SOLO de chollos nuevos.
+Monitor continuo de chollos en VINTED con alertas Telegram.
+Vinted permite peticiones desde servidor a diferencia de Wallapop.
+Comprueba cada X minutos y avisa SOLO de chollos nuevos por Telegram.
 
 Uso:
     pip install requests rich python-dotenv
-    1. Crea archivo .env con TELEGRAM_TOKEN y TELEGRAM_CHAT_ID
-    2. python wallapop_monitor.py
+    python wallapop_monitor.py
 """
 
 import os
@@ -27,48 +27,54 @@ console = Console()
 
 # ===== CONFIGURACION =====
 BUSQUEDAS = [
-    {"query": "iphone 13",        "precio_min": 200, "precio_max": 700},
-    {"query": "iphone 14",        "precio_min": 300, "precio_max": 900},
-    {"query": "playstation 5",    "precio_min": 250, "precio_max": 500},
-    {"query": "nintendo switch oled", "precio_min": 150, "precio_max": 300},
-    {"query": "macbook air m1",   "precio_min": 400, "precio_max": 900},
-    {"query": "airpods pro",      "precio_min": 80,  "precio_max": 220},
-    {"query": "ipad air",         "precio_min": 200, "precio_max": 600},
-    {"query": "apple watch",      "precio_min": 100, "precio_max": 400},
+    {"query": "iphone 13",           "precio_min": 200, "precio_max": 650},
+    {"query": "iphone 14",           "precio_min": 280, "precio_max": 800},
+    {"query": "playstation 5",       "precio_min": 250, "precio_max": 480},
+    {"query": "nintendo switch oled","precio_min": 150, "precio_max": 290},
+    {"query": "macbook air m1",      "precio_min": 400, "precio_max": 850},
+    {"query": "airpods pro",         "precio_min": 80,  "precio_max": 200},
+    {"query": "ipad air",            "precio_min": 200, "precio_max": 580},
+    {"query": "apple watch",         "precio_min": 100, "precio_max": 380},
+    {"query": "gopro",               "precio_min": 80,  "precio_max": 300},
+    {"query": "dyson",               "precio_min": 100, "precio_max": 400},
 ]
 
-DESCUENTO_MIN   = 30            # % minimo para alertar
-CAPITAL         = 430           # € disponibles
-COMISION_VENTA  = 0.10          # 10%
-INTERVALO_MIN   = 15            # minutos entre escaneos
+DESCUENTO_MIN  = 30       # % minimo sobre precio medio
+CAPITAL        = 430      # € disponibles
+COMISION_VENTA = 0.10     # 10% (envio + comision plataforma)
+INTERVALO_MIN  = 15       # minutos entre escaneos
 
-TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT   = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Archivo para recordar chollos ya notificados
 HISTORIAL = Path(os.getenv("HISTORIAL_PATH", Path(__file__).parent / "chollos_vistos.json"))
 HISTORIAL.parent.mkdir(parents=True, exist_ok=True)
 
-API_URL = "https://api.wallapop.com/api/v3/general/search"
-
-HEADERS = {
+# ===== VINTED API =====
+VINTED_URL = "https://www.vinted.es/api/v2/catalog/items"
+VINTED_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://es.wallapop.com/",
-    "Origin": "https://es.wallapop.com",
-    "Connection": "keep-alive",
-    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    "DeviceOS": "0",
-    "X-DeviceOS": "0",
+    "Accept-Language": "es-ES,es;q=0.9",
+    "Referer": "https://www.vinted.es/",
+    "Origin": "https://www.vinted.es",
 }
+
+_sesion = None
+
+def get_sesion():
+    global _sesion
+    if _sesion is None:
+        _sesion = requests.Session()
+        _sesion.headers.update(VINTED_HEADERS)
+        try:
+            # Obtener cookies visitando la web primero
+            _sesion.get("https://www.vinted.es/", timeout=15)
+            time.sleep(2)
+        except Exception:
+            pass
+    return _sesion
 
 
 def cargar_historial():
@@ -86,7 +92,6 @@ def guardar_historial(ids):
 
 def enviar_telegram(mensaje):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
-        console.print("[yellow]⚠ Telegram no configurado (falta TOKEN/CHAT_ID)[/yellow]")
         return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -102,53 +107,39 @@ def enviar_telegram(mensaje):
         return False
 
 
-# Sesion global para mantener cookies entre peticiones
-_sesion = None
-
-def get_sesion():
-    global _sesion
-    if _sesion is None:
-        _sesion = requests.Session()
-        _sesion.headers.update(HEADERS)
-        try:
-            # Visitar la web primero para obtener cookies reales
-            _sesion.get("https://es.wallapop.com/", timeout=15)
-            time.sleep(2)
-        except Exception:
-            pass
-    return _sesion
-
-
 def buscar(query, pmin, pmax):
     try:
         s = get_sesion()
-        r = s.get(API_URL, params={
-            "keywords": query,
-            "min_sale_price": pmin,
-            "max_sale_price": pmax,
-            "order_by": "newest",
-            "country_code": "ES",
-            "filters_source": "search_box",
+        r = s.get(VINTED_URL, params={
+            "search_text": query,
+            "price_from": pmin,
+            "price_to": pmax,
+            "per_page": 96,
+            "order": "newest_first",
+            "currency": "EUR",
         }, timeout=15)
         r.raise_for_status()
         data = r.json()
-        return data.get("search_objects", []) or data.get("data", {}).get("search_objects", [])
+        return data.get("items", [])
     except Exception as e:
         console.print(f"[red]Error '{query}': {e}[/red]")
         return []
 
 
 def extraer(item):
-    price = item.get("price") or item.get("sale_price", 0)
-    if isinstance(price, dict):
-        price = price.get("amount", 0)
+    try:
+        precio = float(item.get("price", {}).get("amount", 0) or item.get("price", 0) or 0)
+    except Exception:
+        precio = 0
     return {
         "id":     str(item.get("id", "")),
         "titulo": (item.get("title") or "")[:70],
-        "precio": float(price or 0),
-        "ciudad": (item.get("user", {}) or {}).get("location", {}).get("city", "")
-                  or item.get("location", {}).get("city", ""),
-        "url":    f"https://es.wallapop.com/item/{item.get('web_slug', item.get('id',''))}",
+        "precio": precio,
+        "marca":  (item.get("brand_title") or ""),
+        "talla":  (item.get("size_title") or ""),
+        "ciudad": (item.get("user", {}) or {}).get("city", ""),
+        "url":    item.get("url") or f"https://www.vinted.es/items/{item.get('id','')}",
+        "foto":   (item.get("photos") or [{}])[0].get("url", "") if item.get("photos") else "",
     }
 
 
@@ -163,7 +154,7 @@ def analizar_query(b, historial):
     precios = [i["precio"] for i in infos]
     ref = (statistics.median(precios) + statistics.mean(precios)) / 2
 
-    chollos_nuevos = []
+    chollos = []
     for i in infos:
         if i["precio"] > CAPITAL or i["id"] in historial:
             continue
@@ -172,26 +163,32 @@ def analizar_query(b, historial):
             venta = ref * (1 - COMISION_VENTA)
             beneficio = venta - i["precio"]
             roi = (beneficio / i["precio"]) * 100
-            chollos_nuevos.append({
-                **i, "descuento": desc, "precio_medio": ref,
-                "beneficio": beneficio, "roi": roi, "query": b["query"],
+            chollos.append({
+                **i,
+                "descuento": desc,
+                "precio_medio": ref,
+                "beneficio": beneficio,
+                "roi": roi,
+                "query": b["query"],
             })
-    return chollos_nuevos
+    return chollos
 
 
 def formato_telegram(c):
+    marca = f" | {c['marca']}" if c["marca"] else ""
+    talla = f" | Talla: {c['talla']}" if c["talla"] else ""
     return (
-        f"🔥 <b>CHOLLO DETECTADO</b>\n"
+        f"🔥 <b>CHOLLO EN VINTED</b>\n"
         f"\n"
-        f"📦 <b>{c['titulo']}</b>\n"
-        f"💰 Precio: <b>{c['precio']:.0f}€</b> (medio: {c['precio_medio']:.0f}€)\n"
+        f"📦 <b>{c['titulo']}</b>{marca}{talla}\n"
+        f"💰 Precio: <b>{c['precio']:.0f}€</b>  (medio mercado: {c['precio_medio']:.0f}€)\n"
         f"📉 Descuento: <b>-{c['descuento']:.0f}%</b>\n"
         f"📈 Beneficio estimado: <b>+{c['beneficio']:.0f}€</b>\n"
         f"🎯 ROI: <b>{c['roi']:.0f}%</b>\n"
         f"📍 {c['ciudad'] or 'No especificado'}\n"
         f"🏷 Busqueda: {c['query']}\n"
         f"\n"
-        f"🔗 <a href=\"{c['url']}\">Ver en Wallapop</a>"
+        f"🔗 <a href=\"{c['url']}\">Ver en Vinted</a>"
     )
 
 
@@ -203,15 +200,18 @@ def ciclo(historial):
         for c in chollos:
             total_nuevos += 1
             historial.add(c["id"])
-            console.print(f"[bold green]🔥 NUEVO CHOLLO:[/bold green] {c['titulo']} - {c['precio']:.0f}€ (-{c['descuento']:.0f}%, ROI {c['roi']:.0f}%)")
+            console.print(
+                f"[bold green]🔥 CHOLLO:[/bold green] {c['titulo']} - "
+                f"{c['precio']:.0f}€ (-{c['descuento']:.0f}%, ROI {c['roi']:.0f}%)"
+            )
             enviar_telegram(formato_telegram(c))
-            time.sleep(1)  # no saturar Telegram
-        time.sleep(2)  # entre queries
+            time.sleep(1)
+        time.sleep(3)  # pausa entre queries para no saturar
 
     if total_nuevos == 0:
         console.print("[dim]  Sin chollos nuevos este ciclo[/dim]")
     else:
-        console.print(f"[bold]✓ {total_nuevos} chollos nuevos enviados a Telegram[/bold]")
+        console.print(f"[bold green]✓ {total_nuevos} chollos enviados a Telegram[/bold green]")
 
     guardar_historial(historial)
     return total_nuevos
@@ -219,22 +219,18 @@ def ciclo(historial):
 
 def main():
     console.print("[bold cyan]" + "="*70 + "[/bold cyan]")
-    console.print(f"[bold cyan] MONITOR WALLAPOP - Alertas Telegram[/bold cyan]")
+    console.print(f"[bold cyan] MONITOR VINTED - Alertas Telegram[/bold cyan]")
     console.print("[bold cyan]" + "="*70 + "[/bold cyan]")
-    console.print(f"Capital: [yellow]{CAPITAL}€[/yellow] | Descuento min: [yellow]{DESCUENTO_MIN}%[/yellow] | Intervalo: [yellow]{INTERVALO_MIN}min[/yellow]")
+    console.print(
+        f"Capital: [yellow]{CAPITAL}€[/yellow] | "
+        f"Descuento min: [yellow]{DESCUENTO_MIN}%[/yellow] | "
+        f"Intervalo: [yellow]{INTERVALO_MIN}min[/yellow]"
+    )
 
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
-        console.print("\n[bold red]⚠ FALTA CONFIGURAR TELEGRAM[/bold red]")
-        console.print("Crea un archivo [cyan].env[/cyan] en esta carpeta con:")
-        console.print("  [dim]TELEGRAM_TOKEN=12345:ABCdef...[/dim]")
-        console.print("  [dim]TELEGRAM_CHAT_ID=987654321[/dim]")
-        console.print("\nVer instrucciones en el README del proyecto.\n")
+    if enviar_telegram(f"🤖 Monitor Vinted activo\nEscaneando cada {INTERVALO_MIN} min"):
+        console.print("[green]✓ Telegram conectado[/green]")
     else:
-        # Test inicial
-        if enviar_telegram(f"🤖 Monitor Wallapop activo\nEscaneando cada {INTERVALO_MIN} min"):
-            console.print("[green]✓ Telegram conectado[/green]")
-        else:
-            console.print("[red]✗ Error conectando con Telegram - revisa TOKEN/CHAT_ID[/red]")
+        console.print("[red]✗ Error Telegram - revisa TOKEN/CHAT_ID[/red]")
 
     historial = cargar_historial()
     console.print(f"[dim]Historial: {len(historial)} chollos ya vistos[/dim]\n")
@@ -245,7 +241,7 @@ def main():
             console.print(f"[dim]💤 Siguiente escaneo en {INTERVALO_MIN} min...[/dim]")
             time.sleep(INTERVALO_MIN * 60)
     except KeyboardInterrupt:
-        console.print("\n[yellow]Monitor detenido por el usuario[/yellow]")
+        console.print("\n[yellow]Monitor detenido[/yellow]")
         guardar_historial(historial)
 
 
