@@ -27,16 +27,18 @@ console = Console()
 
 # ===== CONFIGURACION =====
 BUSQUEDAS = [
-    {"query": "iphone 13",           "precio_min": 200, "precio_max": 650},
-    {"query": "iphone 14",           "precio_min": 280, "precio_max": 800},
-    {"query": "playstation 5",       "precio_min": 250, "precio_max": 480},
-    {"query": "nintendo switch oled","precio_min": 150, "precio_max": 290},
-    {"query": "macbook air m1",      "precio_min": 400, "precio_max": 850},
-    {"query": "airpods pro",         "precio_min": 80,  "precio_max": 200},
-    {"query": "ipad air",            "precio_min": 200, "precio_max": 580},
-    {"query": "apple watch",         "precio_min": 100, "precio_max": 380},
-    {"query": "gopro",               "precio_min": 80,  "precio_max": 300},
-    {"query": "dyson",               "precio_min": 100, "precio_max": 400},
+    # precio_ref = precio medio realista de reventa en segunda mano (Wallapop/Vinted/eBay)
+    # NO es precio de tienda nueva — es lo que TU puedes pedir al revender
+    {"query": "iphone 13",            "precio_min": 200, "precio_max": 650, "precio_ref": 420},
+    {"query": "iphone 14",            "precio_min": 280, "precio_max": 800, "precio_ref": 530},
+    {"query": "playstation 5",        "precio_min": 250, "precio_max": 480, "precio_ref": 380},
+    {"query": "nintendo switch oled", "precio_min": 150, "precio_max": 290, "precio_ref": 240},
+    {"query": "macbook air m1",       "precio_min": 400, "precio_max": 850, "precio_ref": 680},
+    {"query": "airpods pro",          "precio_min": 80,  "precio_max": 200, "precio_ref": 150},
+    {"query": "ipad air",             "precio_min": 200, "precio_max": 580, "precio_ref": 400},
+    {"query": "apple watch",          "precio_min": 100, "precio_max": 380, "precio_ref": 250},
+    {"query": "gopro",                "precio_min": 80,  "precio_max": 300, "precio_ref": 180},
+    {"query": "dyson",                "precio_min": 100, "precio_max": 400, "precio_ref": 250},
 ]
 
 DESCUENTO_MIN  = 30       # % minimo sobre precio medio
@@ -152,8 +154,14 @@ def analizar_query(b, historial):
     infos = [extraer(i) for i in items if i]
     infos = [i for i in infos if i["precio"] > 0]
 
-    precios = [i["precio"] for i in infos]
-    ref = (statistics.median(precios) + statistics.mean(precios)) / 2
+    # Precio de referencia: usamos el fijo si existe, si no calculamos media de Vinted
+    if b.get("precio_ref"):
+        ref = b["precio_ref"]
+        ref_tipo = "mercado 2a mano"
+    else:
+        precios = [i["precio"] for i in infos]
+        ref = (statistics.median(precios) + statistics.mean(precios)) / 2
+        ref_tipo = "media Vinted"
 
     chollos = []
     for i in infos:
@@ -168,6 +176,7 @@ def analizar_query(b, historial):
                 **i,
                 "descuento": desc,
                 "precio_medio": ref,
+                "ref_tipo": ref_tipo,
                 "beneficio": beneficio,
                 "roi": roi,
                 "query": b["query"],
@@ -182,8 +191,9 @@ def formato_telegram(c):
         f"🔥 <b>CHOLLO EN VINTED</b>\n"
         f"\n"
         f"📦 <b>{c['titulo']}</b>{marca}{talla}\n"
-        f"💰 Precio: <b>{c['precio']:.0f}€</b>  (medio mercado: {c['precio_medio']:.0f}€)\n"
-        f"📉 Descuento: <b>-{c['descuento']:.0f}%</b>\n"
+        f"💰 Precio: <b>{c['precio']:.0f}€</b>\n"
+        f"🏷 Ref. reventa ({c['ref_tipo']}): {c['precio_medio']:.0f}€\n"
+        f"📉 Descuento vs reventa: <b>-{c['descuento']:.0f}%</b>\n"
         f"📈 Beneficio estimado: <b>+{c['beneficio']:.0f}€</b>\n"
         f"🎯 ROI: <b>{c['roi']:.0f}%</b>\n"
         f"📍 {c['ciudad'] or 'No especificado'}\n"
