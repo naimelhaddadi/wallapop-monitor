@@ -117,6 +117,7 @@ def buscar(query, pmin, pmax):
             "per_page": 96,
             "order": "newest_first",
             "currency": "EUR",
+            "country_ids[]": 197,   # 197 = España
         }, timeout=15)
         r.raise_for_status()
         data = r.json()
