@@ -1,0 +1,5 @@
+.env
+__pycache__/
+*.pyc
+chollos_vistos.json
+*.log

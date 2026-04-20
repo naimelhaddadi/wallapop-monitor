@@ -1,0 +1,9 @@
+.env
+.env.ejemplo
+__pycache__
+*.pyc
+chollos_vistos.json
+*.pine
+*.py[!y]
+wallapop_chollos.py
+trading_signals.py
