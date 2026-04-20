@@ -27,25 +27,26 @@ console = Console()
 
 # ===== CONFIGURACION =====
 BUSQUEDAS = [
-    # precio_ref = precio medio realista de reventa en segunda mano (Wallapop/Vinted/eBay)
-    # NO es precio de tienda nueva — es lo que TU puedes pedir al revender
-    {"query": "iphone 13",            "precio_min": 200, "precio_max": 650, "precio_ref": 420},
-    {"query": "iphone 14",            "precio_min": 280, "precio_max": 800, "precio_ref": 530},
-    {"query": "playstation 5",        "precio_min": 250, "precio_max": 480, "precio_ref": 380},
-    {"query": "nintendo switch oled", "precio_min": 150, "precio_max": 290, "precio_ref": 240},
-    {"query": "macbook air m1",       "precio_min": 400, "precio_max": 850, "precio_ref": 680},
-    {"query": "airpods pro",          "precio_min": 80,  "precio_max": 200, "precio_ref": 150},
-    {"query": "ipad air",             "precio_min": 200, "precio_max": 580, "precio_ref": 400},
-    {"query": "apple watch",          "precio_min": 100, "precio_max": 380, "precio_ref": 250},
-    {"query": "gopro",                "precio_min": 80,  "precio_max": 300, "precio_ref": 180},
-    {"query": "dyson",                "precio_min": 100, "precio_max": 400, "precio_ref": 250},
+    # precio_ref = precio REAL de reventa en Vinted/Wallapop España (verificado)
+    # Si alguien vende por debajo de esto con descuento >= DESCUENTO_MIN es chollo
+    {"query": "iphone 13",            "precio_min": 150, "precio_max": 350, "precio_ref": 300},
+    {"query": "iphone 14",            "precio_min": 200, "precio_max": 450, "precio_ref": 380},
+    {"query": "playstation 5",        "precio_min": 200, "precio_max": 420, "precio_ref": 350},
+    {"query": "nintendo switch oled", "precio_min": 120, "precio_max": 260, "precio_ref": 210},
+    {"query": "macbook air m1",       "precio_min": 350, "precio_max": 750, "precio_ref": 580},
+    {"query": "airpods pro",          "precio_min": 60,  "precio_max": 170, "precio_ref": 130},
+    {"query": "ipad air",             "precio_min": 150, "precio_max": 450, "precio_ref": 320},
+    {"query": "apple watch series 7", "precio_min": 100, "precio_max": 300, "precio_ref": 200},
+    {"query": "gopro hero 10",        "precio_min": 80,  "precio_max": 250, "precio_ref": 160},
+    {"query": "dyson v11",            "precio_min": 120, "precio_max": 350, "precio_ref": 230},
 ]
 
-DESCUENTO_MIN  = 40       # % minimo sobre precio medio (subido de 30 a 40 para menos ruido)
-BENEFICIO_MIN  = 50       # € minimo de beneficio para alertar
-CAPITAL        = 430      # € disponibles
-COMISION_VENTA = 0.10     # 10% (envio + comision plataforma)
-INTERVALO_MIN  = 15       # minutos entre escaneos
+DESCUENTO_MIN      = 35       # % minimo de descuento vs precio ref
+BENEFICIO_MIN      = 60       # € minimo de beneficio real
+CAPITAL            = 430      # € disponibles
+COMISION_VENTA     = 0.10     # 10% (envio + comision plataforma)
+INTERVALO_MIN      = 15       # minutos entre escaneos
+MAX_ALERTAS_CICLO  = 3        # maximo de alertas por escaneo (evita spam)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -117,10 +118,9 @@ def buscar(query, pmin, pmax):
             "search_text": query,
             "price_from": pmin,
             "price_to": pmax,
-            "per_page": 96,
+            "per_page": 60,
             "order": "newest_first",
             "currency": "EUR",
-            "country_ids[]": 197,   # 197 = España
         }, timeout=15)
         r.raise_for_status()
         data = r.json()
@@ -130,20 +130,34 @@ def buscar(query, pmin, pmax):
         return []
 
 
+# Palabras que delatan que el anuncio es de otro pais
+PALABRAS_EXTRANJERAS = [
+    "bleu","vert","blanc","noir","rouge","tres","bon","etat","boite","cable",
+    "fonctionne","parfaitement","negociable","lumiere","go ","ricondizionato",
+    "bianco","nero","ottime","condizioni","videogiochi","scelle","lire",
+]
+
+def es_espanol(titulo):
+    t = titulo.lower()
+    return not any(p in t for p in PALABRAS_EXTRANJERAS)
+
+
 def extraer(item):
     try:
         precio = float(item.get("price", {}).get("amount", 0) or item.get("price", 0) or 0)
     except Exception:
         precio = 0
+    titulo = (item.get("title") or "")[:70]
+    if not es_espanol(titulo):
+        return None  # descartar anuncios extranjeros
     return {
         "id":     str(item.get("id", "")),
-        "titulo": (item.get("title") or "")[:70],
+        "titulo": titulo,
         "precio": precio,
         "marca":  (item.get("brand_title") or ""),
         "talla":  (item.get("size_title") or ""),
         "ciudad": (item.get("user", {}) or {}).get("city", ""),
         "url":    item.get("url") or f"https://www.vinted.es/items/{item.get('id','')}",
-        "foto":   (item.get("photos") or [{}])[0].get("url", "") if item.get("photos") else "",
     }
 
 
@@ -210,8 +224,13 @@ def ciclo(historial):
     console.print(f"\n[dim]{datetime.now().strftime('%H:%M:%S')} - Escaneando {len(BUSQUEDAS)} busquedas...[/dim]")
     total_nuevos = 0
     for b in BUSQUEDAS:
+        if total_nuevos >= MAX_ALERTAS_CICLO:
+            console.print(f"[yellow]  Limite de {MAX_ALERTAS_CICLO} alertas por ciclo alcanzado[/yellow]")
+            break
         chollos = analizar_query(b, historial)
         for c in chollos:
+            if total_nuevos >= MAX_ALERTAS_CICLO:
+                break
             total_nuevos += 1
             historial.add(c["id"])
             console.print(
@@ -220,7 +239,7 @@ def ciclo(historial):
             )
             enviar_telegram(formato_telegram(c))
             time.sleep(1)
-        time.sleep(3)  # pausa entre queries para no saturar
+        time.sleep(3)
 
     if total_nuevos == 0:
         console.print("[dim]  Sin chollos nuevos este ciclo[/dim]")
