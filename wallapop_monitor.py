@@ -165,16 +165,32 @@ def extraer(item):
         precio = float(item.get("price", {}).get("amount", 0) or item.get("price", 0) or 0)
     except Exception:
         precio = 0
+
     titulo = (item.get("title") or "")[:70]
+    user   = item.get("user") or {}
+
+    # Filtro 1: país del vendedor debe ser España (ES)
+    country_code = (
+        user.get("country_code")
+        or (item.get("user", {}) or {}).get("country", {}).get("code", "")
+        or item.get("country_code", "")
+        or ""
+    ).upper()
+
+    if country_code and country_code != "ES":
+        return None  # vendedor fuera de España
+
+    # Filtro 2: título en idioma extranjero
     if not es_espanol(titulo):
-        return None  # descartar anuncios extranjeros
+        return None
+
     return {
         "id":     str(item.get("id", "")),
         "titulo": titulo,
         "precio": precio,
         "marca":  (item.get("brand_title") or ""),
         "talla":  (item.get("size_title") or ""),
-        "ciudad": (item.get("user", {}) or {}).get("city", ""),
+        "ciudad": user.get("city", "") or user.get("login", ""),
         "url":    item.get("url") or f"https://www.vinted.es/items/{item.get('id','')}",
     }
 
