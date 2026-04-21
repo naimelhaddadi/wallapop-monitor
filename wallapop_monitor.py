@@ -27,18 +27,17 @@ console = Console()
 
 # ===== CONFIGURACION =====
 BUSQUEDAS = [
-    # precio_ref = precio REAL de reventa en Vinted/Wallapop España (verificado)
-    # Si alguien vende por debajo de esto con descuento >= DESCUENTO_MIN es chollo
-    {"query": "iphone 13",            "precio_min": 150, "precio_max": 350, "precio_ref": 300},
-    {"query": "iphone 14",            "precio_min": 200, "precio_max": 450, "precio_ref": 380},
-    {"query": "playstation 5",        "precio_min": 200, "precio_max": 420, "precio_ref": 350},
-    {"query": "nintendo switch oled", "precio_min": 120, "precio_max": 260, "precio_ref": 210},
-    {"query": "macbook air m1",       "precio_min": 350, "precio_max": 750, "precio_ref": 580},
-    {"query": "airpods pro",          "precio_min": 60,  "precio_max": 170, "precio_ref": 130},
-    {"query": "ipad air",             "precio_min": 150, "precio_max": 450, "precio_ref": 320},
-    {"query": "apple watch series 7", "precio_min": 100, "precio_max": 300, "precio_ref": 200},
-    {"query": "gopro hero 10",        "precio_min": 80,  "precio_max": 250, "precio_ref": 160},
-    {"query": "dyson v11",            "precio_min": 120, "precio_max": 350, "precio_ref": 230},
+    # Sin precio_ref fijo — se calcula dinamicamente desde Vinted España
+    {"query": "iphone 13",            "precio_min": 50,  "precio_max": 500},
+    {"query": "iphone 14",            "precio_min": 50,  "precio_max": 600},
+    {"query": "playstation 5",        "precio_min": 100, "precio_max": 550},
+    {"query": "nintendo switch oled", "precio_min": 50,  "precio_max": 350},
+    {"query": "macbook air m1",       "precio_min": 150, "precio_max": 900},
+    {"query": "airpods pro",          "precio_min": 20,  "precio_max": 250},
+    {"query": "ipad air",             "precio_min": 50,  "precio_max": 600},
+    {"query": "apple watch",          "precio_min": 30,  "precio_max": 400},
+    {"query": "gopro",                "precio_min": 30,  "precio_max": 350},
+    {"query": "dyson",                "precio_min": 30,  "precio_max": 450},
 ]
 
 DESCUENTO_MIN      = 35       # % minimo de descuento vs precio ref
@@ -111,23 +110,42 @@ def enviar_telegram(mensaje):
         return False
 
 
-def buscar(query, pmin, pmax):
+def buscar(query, pmin, pmax, order="newest_first"):
     try:
         s = get_sesion()
-        r = s.get(VINTED_URL, params={
-            "search_text": query,
-            "price_from": pmin,
-            "price_to": pmax,
-            "per_page": 60,
-            "order": "newest_first",
-            "currency": "EUR",
-        }, timeout=15)
+        # Pasar country_ids[] como lista de tuplas para que requests lo formatee bien
+        params = [
+            ("search_text", query),
+            ("price_from", pmin),
+            ("price_to", pmax),
+            ("per_page", 96),
+            ("order", order),
+            ("currency", "EUR"),
+            ("country_ids[]", 197),  # 197 = España
+        ]
+        r = s.get(VINTED_URL, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
         return data.get("items", [])
     except Exception as e:
         console.print(f"[red]Error '{query}': {e}[/red]")
         return []
+
+
+def calcular_precio_mercado(query, pmin, pmax):
+    """Busca amplio para calcular precio medio REAL del mercado en España."""
+    items = buscar(query, pmin, pmax, order="relevance")
+    if not items:
+        return None
+    infos = [extraer(i) for i in items if i]
+    infos = [i for i in infos if i is not None and i["precio"] > 0]
+    if len(infos) < 5:
+        return None
+    precios = sorted([i["precio"] for i in infos])
+    # Quitar el 10% mas caro y mas barato (outliers)
+    recorte = max(1, len(precios) // 10)
+    precios_limpios = precios[recorte:-recorte]
+    return statistics.median(precios_limpios)
 
 
 # Palabras que delatan que el anuncio es de otro pais
@@ -162,38 +180,41 @@ def extraer(item):
 
 
 def analizar_query(b, historial):
-    items = buscar(b["query"], b["precio_min"], b["precio_max"])
-    if len(items) < 5:
+    # Paso 1: calcular precio medio REAL del mercado en España
+    ref = calcular_precio_mercado(b["query"], b["precio_min"], b["precio_max"])
+    if ref is None:
+        console.print(f"[yellow]  Sin datos suficientes para '{b['query']}'[/yellow]")
+        return []
+    time.sleep(2)
+
+    # Paso 2: buscar los mas baratos y comparar contra ese precio medio
+    items = buscar(b["query"], b["precio_min"], b["precio_max"], order="price_low_to_high")
+    if not items:
         return []
 
     infos = [extraer(i) for i in items if i]
     infos = [i for i in infos if i is not None and i["precio"] > 0]
 
-    # Precio de referencia: usamos el fijo si existe, si no calculamos media de Vinted
-    if b.get("precio_ref"):
-        ref = b["precio_ref"]
-        ref_tipo = "mercado 2a mano"
-    else:
-        precios = [i["precio"] for i in infos]
-        ref = (statistics.median(precios) + statistics.mean(precios)) / 2
-        ref_tipo = "media Vinted"
+    console.print(f"[dim]  '{b['query']}': precio medio España = {ref:.0f}€ ({len(infos)} items)[/dim]")
 
     chollos = []
     for i in infos:
         if i["precio"] > CAPITAL or i["id"] in historial:
             continue
+        if i["precio"] >= ref:
+            continue  # no es más barato que la media
         desc = (1 - i["precio"] / ref) * 100
         if desc >= DESCUENTO_MIN:
             venta = ref * (1 - COMISION_VENTA)
             beneficio = venta - i["precio"]
             roi = (beneficio / i["precio"]) * 100
-            if beneficio < BENEFICIO_MIN:  # filtrar chollos con poco margen real
+            if beneficio < BENEFICIO_MIN:
                 continue
             chollos.append({
                 **i,
                 "descuento": desc,
                 "precio_medio": ref,
-                "ref_tipo": ref_tipo,
+                "ref_tipo": "media España Vinted",
                 "beneficio": beneficio,
                 "roi": roi,
                 "query": b["query"],
